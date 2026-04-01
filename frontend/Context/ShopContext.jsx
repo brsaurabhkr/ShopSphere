@@ -1,94 +1,177 @@
-import React, { createContext, useEffect, useState } from 'react';
-import all_product from "../src/assets/all_product";
+﻿import React, { createContext, useEffect, useState } from 'react';
 
 export const ShopContext = createContext(null);
 
-const CART_STORAGE_KEY = "shopsphere_cart";
+const CART_STORAGE_KEY = 'shop-cart-items';
+const AUTH_TOKEN_KEY = 'auth-token';
 
-const getInitialCart = () => {
-  try {
-    const savedCart = localStorage.getItem(CART_STORAGE_KEY);
-    if (!savedCart) return {};
-    const parsedCart = JSON.parse(savedCart);
-    if (!parsedCart || typeof parsedCart !== "object") return {};
-
-    const normalizedCart = {};
-    Object.entries(parsedCart).forEach(([key, value]) => {
-      const quantity = Number(value) || 0;
-      if (quantity <= 0) return;
-
-      if (key.includes("-")) {
-        normalizedCart[key] = quantity;
-      } else {
-        normalizedCart[`${key}-M`] = (normalizedCart[`${key}-M`] || 0) + quantity;
-      }
-    });
-
-    return normalizedCart;
-  } catch {
-    return {};
-  }
+const getDefaultcart = () => {
+  return {};
 };
 
-const ShopContextProvider = (props) =>{
+const ShopContextProvider = (props) => {
+  const [all_product, setAllProduct] = useState([]);
+  const [cartItems, setCartItems] = useState(getDefaultcart());
 
-        const [cartItems,setCartItems] = useState(getInitialCart());
+  useEffect(() => {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
+  }, [cartItems]);
 
-        useEffect(() => {
-            localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
-        }, [cartItems]);
+  useEffect(() => {
+    fetch('http://localhost:4000/product/allproducts')
+      .then((response) => response.json())
+      .then((data) => setAllProduct(data))
+      .catch((error) => {
+        console.error('Failed to fetch products:', error);
+      });
+  }, []);
 
-        const addToCart = (itemId, size = "M") =>{
-            const cartKey = `${itemId}-${size}`;
-            setCartItems((prev)=>({...prev,[cartKey]:(prev[cartKey] || 0)+1}));
+  useEffect(() => {
+    const syncCartWithAuth = () => {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+      if (!token) {
+        setCartItems(getDefaultcart());
+        localStorage.removeItem(CART_STORAGE_KEY);
+        return;
+      }
+
+      fetch('http://localhost:4000/getcart', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'auth-token': token,
+          'Content-Type': 'application/json',
+        },
+      })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error('Failed to fetch cart');
+          }
+          return response.json();
+        })
+        .then((data) => {
+          setCartItems(data || getDefaultcart());
+        })
+        .catch((error) => {
+          console.error('Failed to fetch cart data:', error);
+          setCartItems(getDefaultcart());
+        });
+    };
+
+    syncCartWithAuth();
+
+    window.addEventListener('auth-change', syncCartWithAuth);
+    window.addEventListener('storage', syncCartWithAuth);
+
+    return () => {
+      window.removeEventListener('auth-change', syncCartWithAuth);
+      window.removeEventListener('storage', syncCartWithAuth);
+    };
+  }, []);
+
+  const addToCart = (itemId, size) => {
+    if (!size) {
+      return;
+    }
+
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+
+    if (!token) {
+      alert('Please login first to add items to cart.');
+      return;
+    }
+
+    fetch('http://localhost:4000/addtocart', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'auth-token': token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ itemId, size }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Failed to add item to cart');
         }
+        return response.json();
+      })
+      .then((data) => {
+        setCartItems(data.cartData || getDefaultcart());
+      })
+      .catch((error) => {
+        console.error('Failed to sync cart with server:', error);
+      });
+  };
 
-        const removeFromCart = (itemId, size = "M") =>{
-            const cartKey = `${itemId}-${size}`;
-            setCartItems((prev)=>{
-                const nextValue = (prev[cartKey] || 0) - 1;
-                if (nextValue <= 0) {
-                    const updatedCart = { ...prev };
-                    delete updatedCart[cartKey];
-                    return updatedCart;
-                }
-                return { ...prev, [cartKey]: nextValue };
-            });
-        }
+  const removeFromCart = (itemId, size) => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
 
-        const getTotalCartAmount = ()=>{
-            let totalAmount = 0;
-            for(const cartKey in cartItems)
-            {
-                if(cartItems[cartKey]>0)
-                {
-                    const [itemId] = cartKey.split("-");
-                    let itemInfo = all_product.find((product)=>product.id===Number(itemId));
-                    if (itemInfo) {
-                        totalAmount +=  cartItems[cartKey]*itemInfo.new_price;
-                    }
-                }
-            }
-            return totalAmount
-        }
+    if (!token) {
+      setCartItems(getDefaultcart());
+      return;
+    }
 
-        const getTotalCartItems = ()=>{
-            let totalItem=0;
-            for(const cartKey in cartItems)
-            {
-                if(cartItems[cartKey]>0)
-                {
-                    totalItem += cartItems[cartKey];
-                }
-            }
-            return totalItem
+    fetch('http://localhost:4000/removefromcart', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'auth-token': token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ itemId, size }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Failed to remove item from cart');
         }
-         const contextValue = { getTotalCartItems,getTotalCartAmount,all_product,cartItems,addToCart,removeFromCart};
-        return (
-            <ShopContext.Provider value={contextValue}> 
-            {props.children}
-            </ShopContext.Provider>
-        )
-}
+        return response.json();
+      })
+      .then((data) => {
+        setCartItems(data.cartData || getDefaultcart());
+      })
+      .catch((error) => {
+        console.error('Failed to sync cart removal with server:', error);
+      });
+  };
+
+  const getTotalCartAmount = () => {
+    let totalAmount = 0;
+
+    for (const itemId in cartItems) {
+      const itemInfo = all_product.find((product) => product.id === Number(itemId));
+      const sizeMap = cartItems[itemId];
+
+      if (!itemInfo || !sizeMap) {
+        continue;
+      }
+
+      for (const size in sizeMap) {
+        totalAmount += sizeMap[size] * itemInfo.new_price;
+      }
+    }
+
+    return totalAmount;
+  };
+
+  const getTotalCartItems = () => {
+    let totalItem = 0;
+
+    for (const itemId in cartItems) {
+      const sizeMap = cartItems[itemId];
+
+      for (const size in sizeMap) {
+        totalItem += sizeMap[size];
+      }
+    }
+
+    return totalItem;
+  };
+
+  const contextValue = { getTotalCartItems, getTotalCartAmount, all_product, cartItems, addToCart, removeFromCart };
+
+  return <ShopContext.Provider value={contextValue}>{props.children}</ShopContext.Provider>;
+};
 
 export default ShopContextProvider;
